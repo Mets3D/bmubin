@@ -1,19 +1,13 @@
 import math
 import bpy
 
+from itertools import count, islice
 
-def generate_mdb(n):
-    mdb = []
-    i = 0
-    while len(mdb) < n:
-        if i & 0x55555555 == i:
-            mdb.append(i)
-        i += 1
-    return mdb
+MDB = list(islice((i for i in count() if i & 0x55555555 == i), 2**8))
 
 
-def z_from_xy(xy, mdb):
-    return mdb[xy[0]] + 2*mdb[xy[1]]
+def z_from_xy(x, y):
+    return MDB[x] + 2*MDB[y]
 
 
 scale_multiplier = {
@@ -251,46 +245,19 @@ def _build_mubin_table():
     return table
 
 
-def _distance_to_mubin(mubin: str, detail: int, location: tuple):
-    """location tuple formatted (x,y)"""
-    mult = (float(16) / float(_grid_rows_cols[detail]))
-
-    location_coords = (location[0]*mult, location[1]*mult)
-    mc_tl = (_mubin_xy.get(mubin.upper()))
-    mubin_coords = (mc_tl[0]+.5, mc_tl[1]+.5)
-    distance = math.dist(mubin_coords, location_coords)
-
-    return distance
-
-
-def _distance_to_location(target_coords: tuple, detail: int, location: tuple):
-    """location tuple formatted (x,y)"""
-    mult = (float(16) / float(_grid_rows_cols[detail]))
-
-    location_coords = (location[0]*mult, location[1]*mult)
-    distance = math.dist(target_coords, location_coords)
-
-    return distance
-
-
-_threshold_by_lod = [-1, 20, 8, 6, 4, 1, .75, .5, .25]
-
-
-def lod_ignore(target, detail: int, location: tuple):
+def lod_ignore(target, lod_level: int, location: tuple):
     """target can be either a mubin string like \"E-4\" or a location like (7,7)"""
-    # if detail == 1:
-    #     return False
-    # if detail > 4:
-    #     return True
-    # if detail < 5:
-    #     return False
-    threshold = _threshold_by_lod[detail]
-    dist = 10
+    threshold = float([32, 16, 8, 8, 4, 2, 1, .5, .25][lod_level]) / 2 * 0.4
     if type(target) == str:
-        dist = _distance_to_mubin(target, detail, location)
-    elif type(target) == tuple:
-        dist = _distance_to_location(target, detail, location)
-    return dist > threshold
+        mc_tl = _mubin_xy[target.upper()]
+        target_coords = (mc_tl[0], mc_tl[1])
+
+    mult = float(16) / float(_grid_rows_cols[lod_level])
+    location_coords = (location[0]*mult, location[1]*mult)
+
+    dist_x = abs(target_coords[0] - location_coords[0])
+    dist_y = abs(target_coords[1] - location_coords[1])
+    return dist_x > threshold or dist_y > threshold
 
 
 # mubin size is 1000m
