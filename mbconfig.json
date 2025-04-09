@@ -1,6 +1,8 @@
 {
     "colladaPath": "collada",
     "texturesPath": "textures",
-    "dataDir": "data_dir",
-    "depsInstalled": false
+    "dataDir": "D:\\BotW Assets\\Tools\\bmubin\\data_dir",
+    "depsInstalled": true,
+    "blenderPath": "D:/3D/Blender/Current/blender.exe",
+    "terrainHybrid": true
 }

@@ -48,7 +48,6 @@ def open_and_fix_problems(dae_file_path):
     lines_to_write = []
     with open(dae_file_path, 'r') as file:
         lines_to_write = file.readlines()
-        lines_to_write = fix_texture_dir(lines_to_write)
         lines_to_write = simplify_names(lines_to_write)
     with open(dae_file_path, 'w') as file:
         file.writelines(lines_to_write)
@@ -57,9 +56,10 @@ def open_and_fix_problems(dae_file_path):
 # Makes the dae file much less human readable but fixes blender import issues
 def simplify_names(lines: list[str]):
     name_cache = {}
-    sequential_number = 0
-    sequential_numberv = 0
-    # first pass build name cache
+    uv_map_counter = 0
+    vertex_col_counter = 0
+    
+    # First pass: Build name cache.
     for line in lines:
         # TEXCOORD
         regex_match = re.search('source=".*-texcoord', line)
@@ -67,22 +67,24 @@ def simplify_names(lines: list[str]):
             matched_name = regex_match.group()[9:]
             if matched_name in name_cache:
                 continue
-            number_zfill = str(sequential_number).zfill(5)
-            matched_name_value = f'bmubin_fixed_{number_zfill}-texcoord'
+            matched_name_value = f'UVMap{uv_map_counter}-texcoord'
             name_cache[matched_name] = matched_name_value
-            sequential_number += 1
-        regex_match = re.search('source=".*-color', line)
+            uv_map_counter += 1
+
         # VCOLOR
+        regex_match = re.search('source=".*-color', line)
         if regex_match:
             matched_name = regex_match.group()[9:]
             if matched_name in name_cache:
                 continue
-            number_zfill = str(sequential_numberv).zfill(5)
-            matched_name_value = f'bmubin_fixed_{number_zfill}-color'
+            number_zfill = str(vertex_col_counter).zfill(5)
+            matched_name_value = f'Color{number_zfill}-color'
             name_cache[matched_name] = matched_name_value
-            sequential_numberv += 1
+            vertex_col_counter += 1
+
     print(json.dumps(name_cache, indent=4))
-    # now rename
+
+    # Second pass: Rename
     lines_to_write = lines
     for key, value in name_cache.items():
         lines_to_write = [re.sub(key, value, x) for x in lines_to_write]
