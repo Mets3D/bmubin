@@ -1,14 +1,30 @@
-import math
 import bpy
-
 from itertools import count, islice
 
+# TODO Met: Would be nice to understand where this magic number comes from.
+HEIGHT_SCALE = 0.012207
+
 MDB = list(islice((i for i in count() if i & 0x55555555 == i), 2**8))
-
-
-def z_from_xy(x, y):
+def moser_de_brujin(x, y):
+    # The map names correspond to their location in the world based on this funky grid pattern:
+    # https://en.wikipedia.org/wiki/Moser%E2%80%93de_Bruijn_sequence
+    # Different pieces of the map have different max detail levels, so missing pieces in the sequence make sense.
     return MDB[x] + 2*MDB[y]
 
+# Import with Blender's world origin at the center rather than at top-left.
+# (Easier to wrap head around numbers when this is turned off)
+USE_CENTERED_WORLD = True
+
+def calc_vert_world_pos(lod_level, grid_xy, vert_xy):
+    num_chunks = 2**lod_level
+    chunk_world_size = 16000/num_chunks
+    grid_unit_size = chunk_world_size/256
+    x = chunk_world_size * grid_xy[0] + grid_unit_size * vert_xy[0]
+    y = -(chunk_world_size * grid_xy[1] + grid_unit_size * vert_xy[1])
+    if USE_CENTERED_WORLD:
+        return x-8000, y+8000
+    else:
+        return x, y
 
 scale_multiplier = {
     1: 8,
@@ -21,6 +37,7 @@ scale_multiplier = {
     8: .0625
 }
 
+# TODO Met: Implement water and grass!
 scale_multiplier_water = {
     key: value * 4 for key, value in scale_multiplier.items()
 }
@@ -60,43 +77,43 @@ def pair_face_verts_2_to_3(bverts: list):
 def get_face_verts_2_to_3(dist_1, bvert, border_1, border_2):
     dist_2 = dist_1/2
 
-    connected_right_loc = str(dist_1 + bvert.co.x) + str(bvert.co.y)
+    connected_right_loc = str(bvert.co.x + dist_1) + str(bvert.co.y)
     # connected_left_loc = str(-dist_1 + bvert.co.x) + str(bvert.co.y)
     # connected_top_loc = str(bvert.co.x) + str(-dist_1 + bvert.co.y)
-    connected_below_loc = str(bvert.co.x) + str(dist_1 + bvert.co.y)
+    connected_below_loc = str(bvert.co.x) + str(bvert.co.y + dist_1)
 
     bverts = [bvert]
 
-    c_r = str(dist_1 + bvert.co.x) + str(bvert.co.y)  # right
-    c_l = str(-dist_2 + bvert.co.x) + str(bvert.co.y)  # left
-    c_d = str(bvert.co.x) + str(dist_1 + bvert.co.y)  # down
-    c_u = str(bvert.co.x) + str(-dist_2 + bvert.co.y)  # up
-    if bool(border_2.get(c_r)):  # right
+    right = str(bvert.co.x + dist_1) + str(bvert.co.y)
+    left = str(bvert.co.x - dist_2) + str(bvert.co.y)
+    down = str(bvert.co.x) + str(bvert.co.y - dist_1)
+    up = str(bvert.co.x) + str(bvert.co.y - dist_2)
+    if bool(border_2.get(right)):
         bverts += [
-            str(dist_1 + bvert.co.x) + str(bvert.co.y),
-            str(dist_1 + bvert.co.x) + str(dist_2 + bvert.co.y),
-            str(dist_1 + bvert.co.x) + str(dist_1 + bvert.co.y),
+            str(bvert.co.x + dist_1) + str(bvert.co.y),
+            str(bvert.co.x + dist_1) + str(bvert.co.y + dist_2),
+            str(bvert.co.x + dist_1) + str(bvert.co.y + dist_1),
             border_1.get(connected_below_loc)
         ]
-    elif bool(border_2.get(c_l)):  # left
+    elif bool(border_2.get(left)):
         bverts += [
-            str(-dist_2 + bvert.co.x) + str(bvert.co.y),
-            str(-dist_2 + bvert.co.x) + str(dist_2 + bvert.co.y),
-            str(-dist_2 + bvert.co.x) + str(dist_1 + bvert.co.y),
+            str(bvert.co.x - dist_2) + str(bvert.co.y),
+            str(bvert.co.x - dist_2) + str(bvert.co.y + dist_2),
+            str(bvert.co.x - dist_2) + str(bvert.co.y + dist_1),
             border_1.get(connected_below_loc)
         ]
-    elif bool(border_2.get(c_d)):  # down
+    elif bool(border_2.get(down)):
         bverts += [
-            str(bvert.co.x) + str(dist_1 + bvert.co.y),
-            str(dist_2 + bvert.co.x) + str(dist_1 + bvert.co.y),
-            str(dist_1 + bvert.co.x) + str(dist_1 + bvert.co.y),
+            str(bvert.co.x)          + str(bvert.co.y - dist_1),
+            str(bvert.co.x + dist_2) + str(bvert.co.y - dist_1),
+            str(bvert.co.x + dist_1) + str(bvert.co.y - dist_1),
             border_1.get(connected_right_loc)
         ]
-    elif bool(border_2.get(c_u)):  # up
+    elif bool(border_2.get(up)):
         bverts += [
-            str(bvert.co.x) + str(-dist_2 + bvert.co.y),
-            str(dist_2 + bvert.co.x) + str(-dist_2 + bvert.co.y),
-            str(dist_1 + bvert.co.x) + str(-dist_2 + bvert.co.y),
+            str(bvert.co.x)          + str(bvert.co.y - dist_2),
+            str(bvert.co.x + dist_2) + str(bvert.co.y - dist_2),
+            str(bvert.co.x + dist_1) + str(bvert.co.y - dist_2),
             border_1.get(connected_right_loc)
         ]
     bverts = sanitize_face_verts(bverts, border_2)
@@ -193,8 +210,6 @@ def add_map_to_scene(map_name, bm):
     bmesh_data = bpy.data.meshes.new(map_name)
     bm.to_mesh(bmesh_data)
     bmesh_object = bpy.data.objects.new(map_name, bmesh_data)
-    bmesh_object.location = [-8000, 8000, 0]
-    bmesh_object.scale = [3.90752, -3.90752, 0.012207]
     bpy.context.view_layer.active_layer_collection.collection.objects.link(bmesh_object)
 
     # fix normals
@@ -210,6 +225,7 @@ def add_map_to_scene(map_name, bm):
     bpy.ops.mesh.select_all(action='DESELECT')
     # go object mode again
     bpy.ops.object.editmode_toggle()
+    bpy.ops.object.shade_smooth()
 
     default_collection = bpy.data.collections.get('Collection')
     if default_collection:
@@ -218,54 +234,34 @@ def add_map_to_scene(map_name, bm):
     return bmesh_object
 
 
-# mubin distance stuff _____________________________________
-_mubin_prefixes = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
-_mubin_prefixes = [f'{pf}-' for pf in _mubin_prefixes]
-_grid_rows_cols = [0, 2, 4, 8, 16, 32, 64, 128, 256]
-# mubin size is 1000m
-# 16x16 mubin squares total in map
-# A-1 is at 4,5
-
-
-def _build_mubin_table():
-    table = []
-    mubin_xy = {}
-    for i in range(1, 9):
-        row = []
-        for prefix in _mubin_prefixes:
-            row.append(f'{prefix}{i}')
-        table.append(row)
-    # print(table)
-    sx = 3
-    sy = 4
-    for i in range(sx, sx+8):
-        for j in range(sy, sy+10):
-            mubin_xy[table[i-sx][j-sy]] = (j-1, i+1)
-    print(mubin_xy)
-    return table
-
-
-def lod_ignore(target, lod_level: int, location: tuple):
+def terrain_is_within_map_section(map_section, lod_level: int, grid_xy: tuple) -> bool:
     """target can be either a mubin string like \"E-4\" or a location like (7,7)"""
-    threshold = float([32, 16, 8, 8, 4, 2, 1, .5, .25][lod_level]) / 2 * 0.4
-    if type(target) == str:
-        mc_tl = _mubin_xy[target.upper()]
-        target_coords = (mc_tl[0], mc_tl[1])
+    # NOTE: This function only starts making sense at LOD level 4 because below that, a chunk of terrain is larger than a map section (1000m).
+    # (The size of one .hght file is 16000/(2**lod_level), which at lod4 means 16000/16=1000.)
+    # But LOD level 4 is still barely usable since it's 256 points across 1000 meters, 1 vertex every 4 meters.)
+    map_xy = _mubin_xy[map_section.upper()]
+    world_1 = calc_vert_world_pos(4, map_xy, (0, 0))
+    world_2 = calc_vert_world_pos(4, map_xy, (256, 256))
+    min_x = min(world_1[0], world_2[0])
+    max_x = max(world_1[0], world_2[0])
+    min_y = min(world_1[1], world_2[1])
+    max_y = max(world_1[1], world_2[1])
 
-    mult = float(16) / float(_grid_rows_cols[lod_level])
-    location_coords = (location[0]*mult, location[1]*mult)
+    grid_1 = calc_vert_world_pos(lod_level, grid_xy, (0, 0))
+    grid_2 = calc_vert_world_pos(lod_level, grid_xy, (256, 256))
+    grid_min_x = min(grid_1[0], grid_2[0])
+    grid_max_x = max(grid_1[0], grid_2[0])
+    grid_min_y = min(grid_1[1], grid_2[1])
+    grid_max_y = max(grid_1[1], grid_2[1])
 
-    dist_x = abs(target_coords[0] - location_coords[0])
-    dist_y = abs(target_coords[1] - location_coords[1])
-    return dist_x > threshold or dist_y > threshold
-
+    if grid_max_x > max_x or grid_min_x < min_x:
+        return False
+    if grid_max_y > max_y or grid_min_y < min_y:
+        return False
+    return True
 
 # mubin size is 1000m
-# 16x16 mubin squares total in map
-# A-1 is at 3,4
-# E-4 is at 7,7
-# H-2 is at 10,5
-# top left coordinate of each mubin relative to the 16x16 map
+# Top left coordinate of each mubin relative to the 16x16 map
 _mubin_xy = {
     'A-1': (3, 4),
     'B-1': (4, 4),

@@ -192,7 +192,7 @@ def merge_blocks():
 
 def build_block(grid_tl, grid_xy, detail, mdb):
     name = '5' + str(detail)
-    grid_z = z_from_xy(grid_xy, mdb)
+    grid_z = moser_de_brujin(grid_xy, mdb)
 
     name += format(grid_z, '0>8X')
     file = None

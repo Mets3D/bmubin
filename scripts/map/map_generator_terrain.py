@@ -15,8 +15,11 @@ with open("scripts\\map\\index_mapping.json", "r") as f:
     f.close()
 
 
-def vert_dist(lod):
-    return float(scale_multiplier[lod])
+def vert_dist(lod_level):
+    num_chunks = 2**lod_level
+    chunk_world_size = 16000/num_chunks
+    grid_unit_size = chunk_world_size/256
+    return grid_unit_size
 
 
 x_dist = float(1/83)
@@ -33,42 +36,40 @@ vadd = [
     (0, 0),
 ]
 
-
 class TerrainBuilder:
-    def __init__(self, detail: int, target="A-1"):
+    def __init__(self, map_section="A-1"):
         # TODO: It actually doesn't seem to work on detail level 8, at least sometimes?
-        self.detail = min(8, detail)
-        self.target = target
+        self.map_section = map_section
 
         self.bm: bmesh.types.BMesh = bmesh.new()
         self.color_layer = self.bm.loops.layers.float_color.new("material_data")
         self.uv_lay0 = self.bm.loops.layers.uv.new("material0")
         self.uv_lay1 = self.bm.loops.layers.uv.new("material1")
 
-        # Store the internal edges of all LODs by location, for use in combining LODs
-        self.lod_borders = [None, {}, {}, {}, {}, {}, {}, {}, {}, None]
-
         self.blocks = []
         self.bvert_location_cache = {}
         self.bvert_material_table = {}
 
-    def build(self):
-        for lod_current in range(self.detail, 0, -1):
+    def build(self, lod_level):
+        assert lod_level < 9
+        
+        # Store the internal edges of all LODs by location, for use in combining LODs.
+        lod_borders = [None, {}, {}, {}, {}, {}, {}, {}, {}, None]
+        for lod_current in range(lod_level, 0, -1):
             # We use the bvert_location_cache
             # to ignore vertices that have already been accounted for by lower LOD meshes, as we add 
             # more vertices in-between from the higher LODs.
             # This assumes that the data in lower LOD meshes for a given vertex is the same as the data for the same vertex in a lower LOD mesh, which is hopefully and probably true.
-            print(f'detail level {lod_current}')
             lod_verts = self.build_blocks_lod(lod_current)
-            self.lod_borders[lod_current] = {
+            lod_borders[lod_current] = {
                 str(v.co.x)+str(v.co.y): v 
                 for v in lod_verts
                 if len(v.link_edges) < 4
             }
-            # TODO: I think it might make more sense to do this in a separate loop.
-            self.connect_lod_borders(lod_current)
+            self.connect_lod_borders(lod_current, lod_borders)
 
     def build_blocks_lod(self, lod_current) -> list[bmesh.types.BMVert]:
+        # TODO: Refactor this such that it actually takes topleft/bottomright coordinates and just loops over those, from highest to lowest LOD, skipping missing files.
         """tl - top left, br - bottom right"""
         tl, br = (0, 0), (1, 1)
         grid_size = 2**lod_current
@@ -81,48 +82,36 @@ class TerrainBuilder:
             'colour': 'green',
             'desc': 'blocks'
         }
-        # length_y = grid_br[1] + 1 - grid_tl[1]
-        # length_x = grid_br[0] + 1 - grid_tl[0]
-        # print(f'length_y {length_y}')
-        # print(f'length_x {length_x}')
         lod_verts = []
-        for y in tqdm(range(grid_tl[1], grid_br[1] + 1), **tqdm_args):
+        for grid_y in tqdm(range(grid_tl[1], grid_br[1] + 1), **tqdm_args):
             self.blocks_new_row()
-            for x in range(grid_tl[0], grid_br[0] + 1):
-                new_verts = self.build_block(grid_tl, (x, y))
+            for grid_x in range(grid_tl[0], grid_br[0] + 1):
+                # handle LOD focus, ignore if far away
+                if not terrain_is_within_map_section(self.map_section, lod_current, (grid_x, grid_y)):
+                    self.blocks_add_entry(None)
+                    continue
+                block_name = '5' + str(lod_current) + format(moser_de_brujin(grid_x, grid_y), '0>8X')
+                new_verts = self.build_block(block_name, lod_current, (grid_x, grid_y))
                 lod_verts += new_verts
-                if new_verts:
-                    print(f"Added ({x}, {y}) at level {lod_current}")
+                # if new_verts:
+                #     print(f"Added ({grid_x}, {grid_y}) at level {lod_current} from {block_name}")
+                # else:
+                #     print(f"No data for {grid_x}, {grid_y} at level {lod_current} (so no {block_name})")
         self.blocks_new_row()
         self.blocks_new_row()
 
         return lod_verts
 
-    def build_block(self, grid_tl, grid_xy) -> list[bmesh.types.BMVert]:
-        grid_x = (grid_xy[0] - grid_tl[0])
-        grid_y = (grid_xy[1] - grid_tl[1])
-
-        # handle LOD focus, ignore if far away
-        if lod_ignore(self.target, self.detail, (grid_x, grid_y)):
-            self.blocks_add_entry(None)
-            return []
-
-        name = '5' + str(self.detail)
-        grid_z = z_from_xy(grid_xy[0], grid_xy[1])
-
-        name += format(grid_z, '0>8X')
-        hfile = None
-        mfile = None
-
+    def build_block(self, block_name, lod_current, grid_xy) -> list[bmesh.types.BMVert]:
         # https://zeldamods.org/wiki/Water.extm
         # https://zeldamods.org/wiki/MATE
         byte_structure_mate = '<BBBB'
         byte_entry_size_mate = 4
-        file_name_mate = 'map_data/mate/' + name + '.mate'
+        file_name_mate = 'map_data/mate/' + block_name + '.mate'
         # https://zeldamods.org/wiki/HGHT
         byte_structure_hght = '<H'
         byte_entry_size_hght = 2
-        file_name_hght = 'map_data/terrain/' + name + '.hght'
+        file_name_hght = 'map_data/terrain/' + block_name + '.hght'
         # https://zeldamods.org/wiki/Grass.extm
 
         if os.path.isfile(file_name_hght):
@@ -134,7 +123,7 @@ class TerrainBuilder:
                 self.blocks_add_entry(None)
                 return []
         else:
-            # print(f'{file_name} does not exist')
+            # print(f'{file_name_hght} does not exist')
             self.blocks_add_entry(None)
             return []
 
@@ -167,11 +156,6 @@ class TerrainBuilder:
             print(len(material0))
             return []
 
-        # raise 'stop'
-
-        grid_rel_x = 256*grid_x
-        grid_rel_y = 256*grid_y
-
         vertex_x = 0
         vertex_y = 0
         # make verts
@@ -190,10 +174,8 @@ class TerrainBuilder:
                 print("this shouldn't happen")
                 vertex_y = 0
 
-            mult_loc = float(scale_multiplier[self.detail])
-            x_loc = mult_loc * (grid_rel_x + vertex_x)
-            y_loc = mult_loc * (grid_rel_y + vertex_y)
-            location_cache_key = str(x_loc) + str(y_loc)
+            world_xy = calc_vert_world_pos(lod_current, grid_xy, (vertex_x, vertex_y))
+            location_cache_key = str(world_xy)
             vertex_x += 1
             if location_cache_key in self.bvert_location_cache:
                 if self.bvert_location_cache[location_cache_key] == False:
@@ -205,9 +187,9 @@ class TerrainBuilder:
                 self.bvert_location_cache[location_cache_key] = True
 
             bvert = self.bm.verts.new((
-                x_loc,
-                y_loc,
-                height
+                world_xy[0],
+                world_xy[1],
+                height * HEIGHT_SCALE
             ))
             block_verts.append(bvert)
             row.append(bvert)
@@ -220,11 +202,6 @@ class TerrainBuilder:
                 float(mat1)/83,
                 blen
             ]
-            # bvert_material_table[bvert] = [
-            #     0,
-            #     0,
-            #     0
-            # ]
 
         rows.append(row)
         self.blocks_add_entry(rows)
@@ -358,13 +335,13 @@ class TerrainBuilder:
             loop[self.uv_lay0].uv = m0uv
             loop[self.uv_lay1].uv = m1uv
 
-    def connect_lod_borders(self, lod):
-        border_1 = self.lod_borders[lod]
-        border_2 = self.lod_borders[lod+1]
+    def connect_lod_borders(self, lod, lod_borders):
+        border_1 = lod_borders[lod]
+        border_2 = lod_borders[lod+1]
         border_3 = None
         if lod < 7:
-            if len(self.lod_borders[lod+2]) > 0:
-                border_3 = self.lod_borders[lod+2]
+            if len(lod_borders[lod+2]) > 0:
+                border_3 = lod_borders[lod+2]
         if not border_2 or not border_1:
             print(f"connect_lod_borders {lod} input sanitization did not pass")
             return
@@ -388,7 +365,7 @@ class TerrainBuilder:
                 self.make_a_face(face_verts)
 
 
-def build_map(target, LODLevel) -> bmesh.types.BMesh:
+def build_map(map_section, lod_level) -> bmesh.types.BMesh:
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete()
 
@@ -402,8 +379,8 @@ def build_map(target, LODLevel) -> bmesh.types.BMesh:
             space = area.spaces[0]
             space.show_restrict_column_viewport = True
 
-    builder = TerrainBuilder(LODLevel, target)
-    builder.build()
+    builder = TerrainBuilder(map_section)
+    builder.build(lod_level)
 
     print('\n\n')
 
@@ -428,12 +405,12 @@ def main():
         print('No map_data found')
         return
 
-    print("Enter map section (A-1 through J-8): ", end='', flush=True)
-    target = input()
-    print("Enter detail level (1-8, recommended: 4, 5, or 6): ", end='', flush=True)
-    LODLevel = int(input())
-    bmesh = build_map(target, LODLevel)
-    map_name = f'terrain_map {target}'
+    print("Enter map section (A-1 through J-8): ")
+    map_section = input().upper()
+    print("Enter detail level (1-8, recommended: 4, 5, or 6): ")
+    lod_level = int(input())
+    bmesh = build_map(map_section, lod_level)
+    map_name = f'terrain_map {map_section}'
     map_object = add_map_to_scene(map_name, bmesh)
     apply_terrain_mat(map_object)
     save_path = Path(f"asset_library\\{map_name}.blend").absolute()
