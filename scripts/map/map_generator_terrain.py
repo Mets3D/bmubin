@@ -38,17 +38,15 @@ vadd = [
 
 class TerrainBuilder:
     def __init__(self, map_section="A-1"):
-        # TODO: It actually doesn't seem to work on detail level 8, at least sometimes?
         self.map_section = map_section
 
         self.bm: bmesh.types.BMesh = bmesh.new()
-        self.color_layer = self.bm.loops.layers.float_color.new("material_data")
-        self.uv_lay0 = self.bm.loops.layers.uv.new("material0")
-        self.uv_lay1 = self.bm.loops.layers.uv.new("material1")
+        self.mat0 = self.bm.verts.layers.int.new("material0")
+        self.mat1 = self.bm.verts.layers.int.new("material1")
+        self.mat_blend = self.bm.verts.layers.float.new("material_blend")
 
         self.blocks = []
         self.bvert_location_cache = {}
-        self.bvert_material_table = {}
 
     def build(self, lod_level):
         assert lod_level < 9
@@ -146,37 +144,31 @@ class TerrainBuilder:
                 h_data = None
                 m_data = None
 
-        if len(heights) != 65536:
-            print('not enough heights?')
-            return []
+        assert len(heights) == 65536, "Not enough heights?"
+        assert len(material0) == 65536, "Not enough material data?"
 
-        if len(heights) != len(material0):
-            print('height and material mismatch')
-            print(len(heights))
-            print(len(material0))
-            return []
+        # Make verts.
+        block_verts = []
+        vert_x_idx = 0
+        vert_y_idx = 0
 
-        vertex_x = 0
-        vertex_y = 0
-        # make verts
         rows = []
         row = []
-
-        block_verts = []
         for index in range(len(heights)):
             height = heights[index]
-            if vertex_x > 255:
-                vertex_x = 0
-                vertex_y += 1
+            mat0 = material0[index]
+            mat1 = material1[index]
+            mat_blend = blend_weight[index]
+            if vert_x_idx > 255:
+                vert_x_idx = 0
+                vert_y_idx += 1
                 rows.append(row)
                 row = []
-            if vertex_y > 255:
-                print("this shouldn't happen")
-                vertex_y = 0
+            assert vert_y_idx <= 255
 
-            world_xy = calc_vert_world_pos(lod_current, grid_xy, (vertex_x, vertex_y))
+            world_xy = calc_vert_world_pos(lod_current, grid_xy, (vert_x_idx, vert_y_idx))
             location_cache_key = str(world_xy)
-            vertex_x += 1
+            vert_x_idx += 1
             if location_cache_key in self.bvert_location_cache:
                 if self.bvert_location_cache[location_cache_key] == False:
                     self.bvert_location_cache[location_cache_key] = True
@@ -194,18 +186,16 @@ class TerrainBuilder:
             block_verts.append(bvert)
             row.append(bvert)
 
-            mat0 = index_mapping[material0[index]]
-            mat1 = index_mapping[material1[index]]
-            blen = blend_weight[index]
-            self.bvert_material_table[bvert] = [
-                float(mat0)/83,
-                float(mat1)/83,
-                blen
-            ]
+            # Set custom attributes (used by the material to blend textures)
+            # We don't need a UVMap, since it's easiest to just use the vert positions as texture coords. (done in the material)
+            bvert[self.mat0] = mat0
+            bvert[self.mat1] = mat1
+            bvert[self.mat_blend] = mat_blend/255
 
         rows.append(row)
         self.blocks_add_entry(rows)
 
+        # Make faces.
         previous_row = rows[0]
         for row in rows[1:]:
             for bvert_index in range(len(row)-1):
@@ -291,8 +281,6 @@ class TerrainBuilder:
         self.blocks[-1].append(entry)
 
     def blocks_new_row(self):
-        # print('blocks_new_row')
-        # print(len(blocks))
         if len(self.blocks) > 1:
             self.merge_blocks()
         self.blocks.append([])
@@ -308,32 +296,6 @@ class TerrainBuilder:
             pass
         if not new_face:
             return None
-
-        face_mats0 = []
-        face_mats1 = []
-        for loop in new_face.loops:
-            face_mats0.append(self.bvert_material_table[loop.vert][0])
-            face_mats1.append(self.bvert_material_table[loop.vert][1])
-
-        def get_most_common(lst: list):
-            return Counter(lst).most_common(1)[0][0]
-
-        face_mat0 = get_most_common(face_mats0)
-        face_mat1 = get_most_common(face_mats1)
-
-        for index, loop in enumerate(new_face.loops):
-            # rgba
-            make_color = [
-                self.bvert_material_table[loop.vert][0],
-                self.bvert_material_table[loop.vert][1],
-                self.bvert_material_table[loop.vert][2],
-                1
-            ]
-            loop[self.color_layer] = make_color
-            m0uv = (face_mat0 + vadd[index][0], vadd[index][1])
-            m1uv = (face_mat1 + vadd[index][0], vadd[index][1])
-            loop[self.uv_lay0].uv = m0uv
-            loop[self.uv_lay1].uv = m1uv
 
     def connect_lod_borders(self, lod, lod_borders):
         border_1 = lod_borders[lod]
